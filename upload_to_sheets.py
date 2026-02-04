@@ -218,12 +218,24 @@ def main():
         data = []
         for archivo in archivos:
             logging.info(f"Procesando: {archivo}")
+            # Extraer nombre del doctor del archivo (reporte_pacientes_Daniel.xlsx -> Daniel)
+            nombre_base = os.path.splitext(archivo)[0]
+            doctor = nombre_base.split('_')[-1] if '_' in nombre_base else "Desconocido"
+
             archivo_data = leer_excel_robusto(archivo)
             if not data:
+                # Primer archivo: agregar columna "Doctor" al encabezado
+                if archivo_data:
+                    archivo_data[0].append("Doctor")
+                    for fila in archivo_data[1:]:
+                        fila.append(doctor)
                 data = archivo_data
             else:
-                # Saltar encabezado de archivos posteriores
-                data.extend(archivo_data[1:] if len(archivo_data) > 1 else archivo_data)
+                # Archivos posteriores: saltar encabezado, agregar columna Doctor
+                filas = archivo_data[1:] if len(archivo_data) > 1 else archivo_data
+                for fila in filas:
+                    fila.append(doctor)
+                data.extend(filas)
         logging.info(f"Total filas combinadas: {len(data)}")
 
         # Subir a Google Sheets
