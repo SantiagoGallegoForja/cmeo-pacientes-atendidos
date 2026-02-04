@@ -8,7 +8,7 @@ import json
 import logging
 import csv
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -38,17 +38,18 @@ def obtener_credenciales():
         logging.error(f"Error al obtener credenciales: {e}")
         raise
 
-def encontrar_archivo_excel():
-    """Encuentra el archivo Excel mas reciente"""
-    archivos = [f for f in os.listdir('.') if f.endswith('.xlsx') and 'reporte' in f.lower()]
-    if not archivos:
+def encontrar_archivos_excel():
+    """Encuentra los archivos Excel individuales de reporte (no el combinado)"""
+    todos = [f for f in os.listdir('.') if f.endswith('.xlsx') and 'reporte' in f.lower()]
+    if not todos:
         raise FileNotFoundError("No se encontro archivo Excel de reporte")
 
-    # Ordenar por fecha de modificacion (mas reciente primero)
-    archivos.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-    archivo = archivos[0]
-    logging.info(f"Archivo encontrado: {archivo}")
-    return archivo
+    # Preferir archivos individuales sobre el combinado (que puede estar vacio)
+    individuales = [f for f in todos if 'combinado' not in f.lower()]
+    archivos = individuales if individuales else todos
+
+    logging.info(f"Archivos encontrados: {archivos}")
+    return archivos
 
 def convertir_excel_a_csv(archivo_excel):
     """Convierte Excel a CSV usando LibreOffice/libreoffice (mas robusto)"""
@@ -142,9 +143,9 @@ def subir_a_sheets(credentials, sheet_id, data):
     try:
         service = build('sheets', 'v4', credentials=credentials)
 
-        # Nombre de la hoja con fecha actual
-        fecha_actual = datetime.now().strftime("%Y-%m-%d")
-        sheet_name = f"Pacientes_{fecha_actual}"
+        # Nombre de la hoja con fecha de ayer (los datos son de ayer)
+        fecha_ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        sheet_name = f"Pacientes_{fecha_ayer}"
 
         # Crear nueva hoja
         try:
@@ -212,9 +213,18 @@ def main():
         # Obtener credenciales
         credentials = obtener_credenciales()
 
-        # Encontrar y leer archivo Excel
-        archivo = encontrar_archivo_excel()
-        data = leer_excel_robusto(archivo)
+        # Encontrar y leer archivos Excel (individuales por cuenta)
+        archivos = encontrar_archivos_excel()
+        data = []
+        for archivo in archivos:
+            logging.info(f"Procesando: {archivo}")
+            archivo_data = leer_excel_robusto(archivo)
+            if not data:
+                data = archivo_data
+            else:
+                # Saltar encabezado de archivos posteriores
+                data.extend(archivo_data[1:] if len(archivo_data) > 1 else archivo_data)
+        logging.info(f"Total filas combinadas: {len(data)}")
 
         # Subir a Google Sheets
         subir_a_sheets(credentials, sheet_id, data)
