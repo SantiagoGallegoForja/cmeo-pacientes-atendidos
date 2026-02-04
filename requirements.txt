@@ -1,7 +1,7 @@
 selenium==4.15.2
 openpyxl==3.1.2
 beautifulsoup4==4.12.3
-lxml==5.1.0
+lxml>=5.1.0
 google-auth==2.25.2
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0

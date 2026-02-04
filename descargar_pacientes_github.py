@@ -179,43 +179,41 @@ def descargar_reporte_pacientes(driver, nombre_cuenta):
         fecha_inicio_field = None
         fecha_fin_field = None
 
-        # Opcion 1: Por name
+        # Opcion 1: Por ID (especifico de pacientes atendidos)
         try:
-            fecha_inicio_field = wait.until(EC.presence_of_element_located((By.NAME, "desde_inicio_cita")))
-            fecha_fin_field = driver.find_element(By.NAME, "hasta_inicio_cita")
-            logging.info(f"[{nombre_cuenta}] Campos encontrados por NAME")
+            fecha_inicio_field = wait.until(EC.presence_of_element_located((By.ID, "fecha_desde")))
+            fecha_fin_field = driver.find_element(By.ID, "fecha_hasta")
+            logging.info(f"[{nombre_cuenta}] Campos encontrados por ID (fecha_desde/fecha_hasta)")
         except Exception as e1:
-            logging.warning(f"[{nombre_cuenta}] No se encontraron por NAME: {e1}")
+            logging.warning(f"[{nombre_cuenta}] No se encontraron por ID: {e1}")
 
-            # Opcion 2: Por tipo date
+            # Opcion 2: Por name (desde/hasta)
             try:
-                date_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='date']")
-                logging.info(f"[{nombre_cuenta}] Inputs tipo date encontrados: {len(date_inputs)}")
-                if len(date_inputs) >= 2:
-                    fecha_inicio_field = date_inputs[0]
-                    fecha_fin_field = date_inputs[1]
-                    logging.info(f"[{nombre_cuenta}] Campos encontrados por input[type='date']")
+                fecha_inicio_field = wait.until(EC.presence_of_element_located((By.NAME, "desde")))
+                fecha_fin_field = driver.find_element(By.NAME, "hasta")
+                logging.info(f"[{nombre_cuenta}] Campos encontrados por NAME (desde/hasta)")
             except Exception as e2:
-                logging.warning(f"[{nombre_cuenta}] No se encontraron por type='date': {e2}")
+                logging.warning(f"[{nombre_cuenta}] No se encontraron por NAME: {e2}")
 
-            # Opcion 3: Por placeholder o label
+            # Opcion 3: Por tipo date
             if not fecha_inicio_field:
                 try:
-                    fecha_inicio_field = driver.find_element(By.XPATH, "//input[contains(@placeholder, 'desde') or contains(@placeholder, 'inicio') or contains(@placeholder, 'Desde')]")
-                    fecha_fin_field = driver.find_element(By.XPATH, "//input[contains(@placeholder, 'hasta') or contains(@placeholder, 'fin') or contains(@placeholder, 'Hasta')]")
-                    logging.info(f"[{nombre_cuenta}] Campos encontrados por placeholder")
+                    date_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='date']")
+                    logging.info(f"[{nombre_cuenta}] Inputs tipo date encontrados: {len(date_inputs)}")
+                    if len(date_inputs) >= 2:
+                        fecha_inicio_field = date_inputs[0]
+                        fecha_fin_field = date_inputs[1]
+                        logging.info(f"[{nombre_cuenta}] Campos encontrados por input[type='date']")
                 except Exception as e3:
-                    logging.warning(f"[{nombre_cuenta}] No se encontraron por placeholder: {e3}")
+                    logging.warning(f"[{nombre_cuenta}] No se encontraron por type='date': {e3}")
 
         if not fecha_inicio_field or not fecha_fin_field:
             raise Exception(f"No se pudieron encontrar los campos de fecha con ningun selector para {nombre_cuenta}")
 
-        logging.info(f"[{nombre_cuenta}] Llenando campos de fecha...")
-        fecha_inicio_field.clear()
-        fecha_inicio_field.send_keys(fecha_inicio_str)
-
-        fecha_fin_field.clear()
-        fecha_fin_field.send_keys(fecha_fin_str)
+        logging.info(f"[{nombre_cuenta}] Llenando campos de fecha con JavaScript...")
+        # Usar JavaScript para establecer valores (los campos son datepickers tipo text)
+        driver.execute_script("arguments[0].value = arguments[1];", fecha_inicio_field, fecha_inicio_str)
+        driver.execute_script("arguments[0].value = arguments[1];", fecha_fin_field, fecha_fin_str)
 
         time.sleep(1)
 
@@ -292,7 +290,7 @@ def combinar_excels(archivos_excel):
         logging.info(f"Procesando: {archivo}")
 
         try:
-            wb = load_workbook(archivo, read_only=True, data_only=True)
+            wb = load_workbook(archivo, data_only=True)
             ws = wb.active
 
             for idx, row in enumerate(ws.iter_rows(values_only=True)):
