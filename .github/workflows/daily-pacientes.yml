@@ -1,0 +1,60 @@
+name: Descarga Diaria de Pacientes Atendidos
+
+on:
+  schedule:
+    # Ejecutar todos los dias a las 8:00 AM UTC (3:00 AM Colombia)
+    - cron: '0 8 * * *'
+  workflow_dispatch: # Permite ejecucion manual desde GitHub
+
+jobs:
+  descargar-pacientes:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout codigo
+      uses: actions/checkout@v4
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Instalar dependencias
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Instalar Chrome y LibreOffice
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget unzip libreoffice
+        # Instalar Chrome
+        wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        sudo apt install -y ./google-chrome-stable_current_amd64.deb
+        # Verificar instalacion
+        google-chrome --version
+        libreoffice --version
+
+    - name: Ejecutar script de descarga
+      env:
+        GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+      run: |
+        python descargar_pacientes_github.py
+
+    - name: Subir archivo a Google Sheets
+      env:
+        GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+        GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+      run: |
+        python upload_to_sheets.py
+
+    - name: Guardar logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: execution-logs
+        path: |
+          *.png
+          *.log
+        retention-days: 7
