@@ -37,8 +37,8 @@ CUENTAS = [
     {"nombre": "Carolina", "email": "campuzanocarolina14@gmail.com", "password": "43979299"},
 ]
 
-# Carpeta de descargas
-DOWNLOAD_DIR = os.getcwd()
+# Carpeta de descargas (ruta absoluta requerida para CDP en headless)
+DOWNLOAD_DIR = os.path.abspath(os.getcwd())
 
 def configurar_chrome():
     """Configura opciones de Chrome para GitHub Actions (headless)"""
@@ -68,6 +68,12 @@ def configurar_chrome():
 
     # Inicializar driver
     driver = webdriver.Chrome(options=chrome_options)
+
+    # Habilitar descargas en modo headless via CDP
+    driver.execute_cdp_cmd("Page.setDownloadBehavior", {
+        "behavior": "allow",
+        "downloadPath": DOWNLOAD_DIR
+    })
 
     return driver
 
@@ -244,7 +250,20 @@ def descargar_reporte_pacientes(driver, nombre_cuenta):
         download_button.click()
 
         logging.info(f"[{nombre_cuenta}] Descarga iniciada. Esperando que se complete...")
-        time.sleep(8)
+        # Esperar hasta 15 segundos a que aparezca el archivo .xlsx
+        archivo_encontrado = False
+        for intento in range(15):
+            time.sleep(1)
+            archivos = glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx"))
+            archivos_tmp = glob.glob(os.path.join(DOWNLOAD_DIR, "*.crdownload"))
+            if archivos and not archivos_tmp:
+                archivo_encontrado = True
+                break
+            if intento % 5 == 4:
+                logging.info(f"[{nombre_cuenta}] Esperando descarga... (intento {intento+1}/15)")
+                # Listar archivos en el directorio para diagnostico
+                todos = os.listdir(DOWNLOAD_DIR)
+                logging.info(f"[{nombre_cuenta}] Archivos en directorio: {[f for f in todos if not f.startswith('.')]}")
 
         # Buscar el archivo descargado mas reciente y renombrarlo
         archivos = glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx"))
@@ -263,6 +282,9 @@ def descargar_reporte_pacientes(driver, nombre_cuenta):
             return nuevo_nombre
         else:
             logging.warning(f"[{nombre_cuenta}] No se detectaron archivos Excel descargados")
+            # Listar todos los archivos para diagnostico
+            todos = os.listdir(DOWNLOAD_DIR)
+            logging.warning(f"[{nombre_cuenta}] Archivos en directorio de descarga: {[f for f in todos if not f.startswith('.')]}")
             return None
 
     except Exception as e:
