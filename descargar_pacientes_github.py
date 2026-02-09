@@ -16,6 +16,8 @@ import os
 import logging
 import glob
 import shutil
+import base64
+import requests
 
 # Configurar logging
 logging.basicConfig(
@@ -237,55 +239,159 @@ def descargar_reporte_pacientes(driver, nombre_cuenta):
         logging.info(f"[{nombre_cuenta}] Captura de resultados guardada")
 
         logging.info(f"[{nombre_cuenta}] Buscando boton de descarga/exportar...")
+        download_button = None
         try:
             download_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Descargar') or contains(text(), 'Exportar') or contains(text(), 'Excel') or contains(text(), 'Export')]")
         except:
             try:
                 download_button = driver.find_element(By.XPATH, "//a[contains(text(), 'Descargar') or contains(text(), 'Exportar') or contains(text(), 'Excel') or contains(text(), 'Export')]")
             except:
-                download_button = driver.find_element(By.CSS_SELECTOR, "button i[class*='download'], a i[class*='download'], button i[class*='file'], a i[class*='file']")
-                download_button = download_button.find_element(By.XPATH, "..")
+                try:
+                    icon = driver.find_element(By.CSS_SELECTOR, "button i[class*='download'], a i[class*='download'], button i[class*='file'], a i[class*='file']")
+                    download_button = icon.find_element(By.XPATH, "..")
+                except:
+                    pass
 
-        logging.info(f"[{nombre_cuenta}] Haciendo clic en boton de descarga...")
-        download_button.click()
+        # Diagnosticar el boton de descarga
+        if download_button:
+            button_html = driver.execute_script("return arguments[0].outerHTML;", download_button)
+            button_tag = download_button.tag_name
+            button_href = download_button.get_attribute('href')
+            logging.info(f"[{nombre_cuenta}] Boton encontrado: tag={button_tag}, href={button_href}")
+            logging.info(f"[{nombre_cuenta}] Boton HTML: {button_html[:500]}")
 
-        logging.info(f"[{nombre_cuenta}] Descarga iniciada. Esperando que se complete...")
-        # Esperar hasta 15 segundos a que aparezca el archivo .xlsx
-        archivo_encontrado = False
-        for intento in range(15):
-            time.sleep(1)
-            archivos = glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx"))
-            archivos_tmp = glob.glob(os.path.join(DOWNLOAD_DIR, "*.crdownload"))
-            if archivos and not archivos_tmp:
-                archivo_encontrado = True
-                break
-            if intento % 5 == 4:
-                logging.info(f"[{nombre_cuenta}] Esperando descarga... (intento {intento+1}/15)")
-                # Listar archivos en el directorio para diagnostico
-                todos = os.listdir(DOWNLOAD_DIR)
-                logging.info(f"[{nombre_cuenta}] Archivos en directorio: {[f for f in todos if not f.startswith('.')]}")
+            # Verificar si esta dentro de un formulario
+            form_info = driver.execute_script("""
+                var form = arguments[0].closest('form');
+                if (form) {
+                    var inputs = {};
+                    form.querySelectorAll('input').forEach(function(i) {
+                        if (i.name) inputs[i.name] = i.value;
+                    });
+                    return {action: form.action, method: form.method || 'get', inputs: inputs};
+                }
+                return null;
+            """, download_button)
+            logging.info(f"[{nombre_cuenta}] Form info: {form_info}")
+        else:
+            button_href = None
+            form_info = None
+            logging.warning(f"[{nombre_cuenta}] No se encontro boton de descarga")
 
-        # Buscar el archivo descargado mas reciente y renombrarlo
+        # Inyectar interceptor de blobs antes de hacer clic
+        driver.execute_script("""
+            window.__capturedBlob = null;
+            var origCreateObjectURL = URL.createObjectURL;
+            URL.createObjectURL = function(blob) {
+                var url = origCreateObjectURL.call(URL, blob);
+                var reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onloadend = function() {
+                    window.__capturedBlob = reader.result;
+                };
+                return url;
+            };
+        """)
+
+        # Hacer clic en el boton de descarga
+        if download_button:
+            logging.info(f"[{nombre_cuenta}] Haciendo clic en boton de descarga...")
+            driver.execute_script("arguments[0].click();", download_button)
+            time.sleep(5)
+
+        # === Estrategia 1: Verificar si Chrome descargo el archivo ===
         archivos = glob.glob(os.path.join(DOWNLOAD_DIR, "*.xlsx"))
         if archivos:
-            # Ordenar por fecha de modificacion (mas reciente primero)
             archivos.sort(key=os.path.getmtime, reverse=True)
             archivo_descargado = archivos[0]
             nuevo_nombre = os.path.join(DOWNLOAD_DIR, f"reporte_pacientes_{nombre_cuenta}.xlsx")
-
-            # Si ya existe un archivo con ese nombre, eliminarlo
             if os.path.exists(nuevo_nombre):
                 os.remove(nuevo_nombre)
-
             shutil.move(archivo_descargado, nuevo_nombre)
-            logging.info(f"[{nombre_cuenta}] Archivo renombrado a: {nuevo_nombre}")
+            logging.info(f"[{nombre_cuenta}] Archivo descargado via Chrome: {nuevo_nombre}")
             return nuevo_nombre
-        else:
-            logging.warning(f"[{nombre_cuenta}] No se detectaron archivos Excel descargados")
-            # Listar todos los archivos para diagnostico
-            todos = os.listdir(DOWNLOAD_DIR)
-            logging.warning(f"[{nombre_cuenta}] Archivos en directorio de descarga: {[f for f in todos if not f.startswith('.')]}")
-            return None
+
+        logging.info(f"[{nombre_cuenta}] Chrome no descargo archivo, intentando alternativas...")
+
+        # === Estrategia 2: Verificar blob interceptado ===
+        time.sleep(2)
+        captured = driver.execute_script("return window.__capturedBlob;")
+        if captured:
+            logging.info(f"[{nombre_cuenta}] Blob interceptado! Guardando archivo...")
+            data = base64.b64decode(captured.split(',')[1])
+            filepath = os.path.join(DOWNLOAD_DIR, f"reporte_pacientes_{nombre_cuenta}.xlsx")
+            with open(filepath, 'wb') as f:
+                f.write(data)
+            return filepath
+
+        # === Estrategia 3: Descargar via requests con cookies de Selenium ===
+        logging.info(f"[{nombre_cuenta}] Intentando descarga directa via requests...")
+        cookies = {c['name']: c['value'] for c in driver.get_cookies()}
+        session = requests.Session()
+        for name, value in cookies.items():
+            session.cookies.set(name, value)
+        session.headers.update({
+            'User-Agent': driver.execute_script("return navigator.userAgent;")
+        })
+
+        # Intentar con href del boton o action del formulario
+        download_url = None
+        if button_href and button_href.startswith('http'):
+            download_url = button_href
+        elif form_info and form_info.get('action'):
+            download_url = form_info['action']
+
+        if download_url:
+            logging.info(f"[{nombre_cuenta}] Descargando desde URL: {download_url}")
+            if form_info and form_info.get('method', '').lower() == 'post':
+                response = session.post(download_url, data=form_info.get('inputs', {}))
+            else:
+                response = session.get(download_url)
+
+            if response.status_code == 200 and len(response.content) > 100:
+                filepath = os.path.join(DOWNLOAD_DIR, f"reporte_pacientes_{nombre_cuenta}.xlsx")
+                with open(filepath, 'wb') as f:
+                    f.write(response.content)
+                logging.info(f"[{nombre_cuenta}] Archivo descargado via requests: {filepath} ({len(response.content)} bytes)")
+                return filepath
+            else:
+                logging.warning(f"[{nombre_cuenta}] Requests fallo: status={response.status_code}, size={len(response.content)}")
+
+        # === Estrategia 4: POST directo al endpoint de reporte ===
+        logging.info(f"[{nombre_cuenta}] Intentando POST directo al endpoint...")
+        csrf_token = driver.execute_script(
+            "return document.querySelector('input[name=_token]')?.value || "
+            "document.querySelector('meta[name=csrf-token]')?.content || ''")
+
+        export_urls = [
+            f"{URL_PACIENTES}/exportar",
+            f"{URL_PACIENTES}/export",
+            f"{URL_PACIENTES}/excel",
+            URL_PACIENTES,
+        ]
+        for url in export_urls:
+            try:
+                response = session.post(url, data={
+                    '_token': csrf_token,
+                    'desde': fecha_inicio_str,
+                    'hasta': fecha_fin_str,
+                    'reporte': 'pacientesAtendidosFecha',
+                })
+                content_type = response.headers.get('content-type', '')
+                logging.info(f"[{nombre_cuenta}] POST {url}: status={response.status_code}, content-type={content_type}, size={len(response.content)}")
+                if response.status_code == 200 and ('spreadsheet' in content_type or 'excel' in content_type or 'octet-stream' in content_type):
+                    filepath = os.path.join(DOWNLOAD_DIR, f"reporte_pacientes_{nombre_cuenta}.xlsx")
+                    with open(filepath, 'wb') as f:
+                        f.write(response.content)
+                    logging.info(f"[{nombre_cuenta}] Archivo descargado via POST directo: {filepath}")
+                    return filepath
+            except Exception as req_e:
+                logging.warning(f"[{nombre_cuenta}] Error en POST a {url}: {req_e}")
+
+        logging.warning(f"[{nombre_cuenta}] Todas las estrategias de descarga fallaron")
+        todos = os.listdir(DOWNLOAD_DIR)
+        logging.warning(f"[{nombre_cuenta}] Archivos en directorio: {[f for f in todos if not f.startswith('.')]}")
+        return None
 
     except Exception as e:
         logging.error(f"[{nombre_cuenta}] Error al descargar reporte: {str(e)}")
